@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title></title>
+    <script src="js/wasm_exec.js"></script>
+    <script src="js/vivus.js"></script>
+    <script src="js/imagetracer_v1.2.5.js"></script>
+    <script src="js/gifjs/gif.js"></script>
+    <script src="js/html2canvas.min.js"></script>
+    <script src="js/dom-to-image.min.js"></script>
+
+</head>
+
+<body style="background-color:chocolate">
+    <img crossorigin="anonymous" onclick="Trc()" id="srcimg">
+    <fieldset>
+        <legend>Options:</legend>
+        Source Image:<input type="file" id="fileinput">
+        Draw Type: <select id="typeselect">
+            <option value="delayed">Delayed</option>
+            <option value="sync">Sync</option>
+            <option value="oneByOne">OneByOne</option>
+        </select>
+        Frame Count: <input id="duration" value="200" type="number">
+        Capture Interval: <input id="intervaltime" value="100" type="number">
+        Animation Background :<input type="color" value="#ffffff" id="bgColor">
+        <hr>
+        <div style="display: inline-flex; width: 100%">
+            <div>
+                <button disabled="true" id="scanbutton" onclick="Trc()">Scan Svg</button>
+                <button disabled="true" id="renderbutton" onclick="start()">Start Anim & GetFrames</button>
+                <button id="forcestopbutton" onclick="forceStop()">Stop Capturing</button>
+                <button id="send2wasm" onclick="send2wasm()">Start Rendering -> Gif</button>
+            </div>
+            <div style="flex-grow: 1"></div>
+            <span>Progress:<span id="progresstxt"></span></span> <progress id="progressbar" max="100" value="0"></progress>
+
+        </div>
+
+    </fieldset>
+    <fieldset>
+        <legend>Scan Options:</legend>
+        <button onclick="clearScan()">Clear Scan</button>
+        Path Omit:<input type="number" value="3" id="pathOmit">
+        Stroke Width:<input type="number" value="0.5" id="strokeWidth">
+        Scale:<input type="number" value="1" id="scaleOpt">
+        Right Angle Enchance <input type="checkbox" id="rightAngle" checked="true">
+        Ltres:<input type="number" value="1" id="ltres">
+        Qtres:<input type="number" value="1" id="qtres">
+    </fieldset>
+    <img id="renderResult">
+    <script>
+        var base64array = [];
+        var base64arraylen;
+        const go = new Go();
+        
+        WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
+            go.run(result.instance);
+        });
+
+     
+        
+        function downloadString(text, fileType, fileName) {
+            var blob = new Blob([text], {
+                type: fileType
+            });
+
+            var a = document.createElement('a');
+            a.download = fileName;
+            a.href = URL.createObjectURL(blob);
+            a.dataset.downloadurl = [fileType, a.download, a.href].join(':');
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() {
+                URL.revokeObjectURL(a.href);
+            }, 1500);
+        }
+
+        function renderDone(renderRes) {
+            var formattedRes = "data:image/gif;base64," + renderRes;
+            console.log(renderRes)
+            document.getElementById("renderResult").src = formattedRes;
+            // downloadString(renderRes,"img/gif","renderResGif.gif");
+        }
+
+    </script>
+    <script>
+        var captint;
+        var startTime;
+        var endTime;
+        var progressbar = document.getElementById("progressbar");
+        var progresstxt = document.getElementById("progresstxt");
+
+        var gif = new GIF({
+            workers: 2,
+            quality: 10,
+            delay: 0,
+        });
+
+        function clearScan() {
+            document.getElementById("svgcontainer").innerHTML = "";
+        }
+
+        function send2wasm() {
+            sendArray();
+            startRender();
+        }
+
+        function threadEnd(msg, cnt) {
+            console.log(msg);
+            //Implement progressbar
+            progressbar.max = base64arraylen;
+            progressbar.value = progressbar.value++;
+            progresstxt.innerHTML = cnt + "/" + base64arraylen;
+        }
+
+        window.onload = function() {
+            var img = document.getElementById("srcimg");
+            var fileinput = document.getElementById("fileinput");
+            fileinput.onchange = function(evt) {
+                var files = evt.target.files; // FileList object
+                var file = files[0];
+                if (file.type.match('image.*')) {
+                    var reader = new FileReader();
+                    // Read in the image file as a data URL.
+                    reader.readAsDataURL(file);
+                    reader.onload = function(evt) {
+                        if (evt.target.readyState == FileReader.DONE) {
+                            img.src = evt.target.result;
+                            document.getElementById("scanbutton").disabled = false;
+                        }
+                    }
+
+                } else {
+                    alert("not an image");
+                    document.getElementById("scanbutton").disabled = false;
+                }
+            };
+        }
+
+        function downloadString(text, fileType, fileName) {
+            var blob = new Blob([text], {
+                type: fileType
+            });
+
+            var a = document.createElement('a');
+            a.download = fileName;
+            a.href = URL.createObjectURL(blob);
+            a.dataset.downloadurl = [fileType, a.download, a.href].join(':');
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() {
+                URL.revokeObjectURL(a.href);
+            }, 1500);
+        }
+
+
+
+
+        function Trc() {
+            var options = {
+                ltres: document.getElementById("ltres").value,
+                qtres: document.getElementById("qtres").value,
+                scale: document.getElementById("scaleOpt").value,
+                pathomit: document.getElementById("pathOmit").value,
+                strokewidth: document.getElementById("strokeWidth").value,
+                rightangleenhance: document.getElementById("rightAngle").checked
+            };
+            var canvas = document.createElement("canvas");
+            canvas.width = document.getElementById("srcimg").width;
+            canvas.height = document.getElementById("srcimg").height;
+            ctx = canvas.getContext('2d');
+            ctx.drawImage(document.getElementById("srcimg"), 0, 0);
+            ImageTracer.imageToSVG(
+                canvas.toDataURL(),
+                function(svgstr) {
+                    ImageTracer.appendSVGString(svgstr, 'svgcontainer');
+
+
+
+                    document.getElementById("svgcontainer").firstElementChild.id = "my-svg";
+
+                    document.getElementById("svgcontainer").firstElementChild.setAttribute("fill-opacity", "0.0");
+                    document.getElementById("svgcontainer").firstElementChild.setAttribute("stroke-linejoin", "round")
+                    document.getElementById("svgcontainer").firstElementChild.setAttribute("stroke-linecap", "round")
+                    document.getElementById("renderbutton").disabled = false;
+                    document.getElementById("svgcontainer").style.width = document.getElementById("my-svg").width.baseVal.value + "px";
+                    document.getElementById("svgcontainer").style.height = document.getElementById("my-svg").height.baseVal.value + "px";
+                    /*document.getElementById("svgcontainer").firstElementChild.setAttribute("onclick", "start()");*/
+                    /*downloadString(document.getElementById("svgcontainer").innerHTML,"text/svg","outputSvg.svg);*/
+
+                },
+                options
+            );
+        }
+
+        function myCallback() {
+
+            console.log("done");
+            clearInterval(captint);
+
+            endTime = Date.now();
+            console.log(endTime - startTime);
+
+        }
+
+        function capt(duration) {
+            var bgcolor = document.getElementById("bgColor").value;
+            captint = setInterval(function() {
+
+
+                domtoimage.toPng(document.getElementById("my-svg"), {
+                        bgcolor: bgcolor
+                    })
+                    .then(function(dataUrl) {
+                        var dataURL = dataUrl;
+                        var formattedDataURL = dataURL.split(",");
+                        base64array.push(formattedDataURL[1]);
+                        console.log(base64array.length);
+
+                        base64arraylen = base64array.length;
+                    })
+                    .catch(function(error) {
+                        console.error('oops, something went wrong!', error);
+                    });
+                /*
+                html2canvas(document.getElementById("svgcontainer")).then(canvas => {
+
+                    var dataURL = canvas.toDataURL();
+                    var formattedDataURL = dataURL.split(",");
+                    base64array.push(formattedDataURL[1]);
+                    console.log(base64array.length);
+
+                    base64arraylen = base64array.length;
+                   
+                });*/
+
+
+
+
+            }, document.getElementById("intervaltime").value);
+
+
+
+        }
+
+        function forceStop() {
+            clearInterval(captint);
+        }
+
+        function start() {
+            var animtype = document.getElementById("typeselect").value;
+            var animduration = document.getElementById("duration").value;
+
+            var myVivus = new Vivus('my-svg', {
+                type: animtype,
+                duration: animduration
+            }, myCallback);
+            startTime = Date.now();
+            capt(animduration);
+            myVivus.play(1);
+
+
+        }
+
+    </script>
+</body>
+
+</html>
